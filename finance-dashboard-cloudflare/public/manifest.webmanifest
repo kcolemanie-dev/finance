@@ -1,0 +1,21 @@
+{
+  "name": "Finance Dashboard",
+  "short_name": "Finance",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08101d",
+  "theme_color": "#0b1220",
+  "description": "Balances, ETF portfolio tracking, and deemed disposal planning.",
+  "icons": [
+    {
+      "src": "/icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "/icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
