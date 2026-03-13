@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { FUND_CURRENT_PRICES, FUND_COLORS } from '../data/funds';
+import { FUND_CURRENT_PRICES } from '../data/funds';
 import { TRANSACTIONS_RAW } from '../data/transactions';
 import { addYears, daysUntil, formatEur, formatLongDate, parseDate } from '../lib/format';
-import { buildTemplateCsv, loadImportedLots, mergeImportedLots, parseDisposalCsv, saveImportedLots } from '../lib/disposalImport';
+import { buildTemplateCsv, loadImportedLots, makeLotKey, mergeImportedLots, parseDisposalCsv, saveImportedLots } from '../lib/disposalImport';
 
 function urgency(days) {
   if (days <= 365) return 'text-red';
@@ -28,11 +28,27 @@ export default function DeemedDisposalTab() {
   const [replaceOnImport, setReplaceOnImport] = useState(true);
   const [importSummary, setImportSummary] = useState(null);
   const [importError, setImportError] = useState('');
+  const [reviewFilter, setReviewFilter] = useState('all');
   const fileInputRef = useRef(null);
 
   useEffect(() => {
     setImportedLots(loadImportedLots());
   }, []);
+
+  const importedLotsDetailed = useMemo(() => {
+    return importedLots
+      .map((lot, index) => {
+        const buyDate = parseDate(lot.date);
+        const deemedDate = addYears(buyDate, 8);
+        return {
+          ...lot,
+          reviewKey: `${makeLotKey(lot)}|${index}`,
+          deemedDate,
+          days: daysUntil(deemedDate),
+        };
+      })
+      .sort((a, b) => a.deemedDate - b.deemedDate);
+  }, [importedLots]);
 
   const allTransactions = useMemo(() => [...TRANSACTIONS_RAW, ...importedLots], [importedLots]);
 
@@ -72,6 +88,25 @@ export default function DeemedDisposalTab() {
   const funds = Array.from(new Set(allTransactions.map((tx) => tx.fund)));
   const maxYear = Math.max(...Object.values(yearlyBuckets), 1);
 
+  const importedSummary = useMemo(() => {
+    return importedLotsDetailed.reduce((acc, lot) => {
+      if (!acc[lot.fund]) acc[lot.fund] = { count: 0, units: 0, cost: 0 };
+      acc[lot.fund].count += 1;
+      acc[lot.fund].units += Number(lot.units || 0);
+      acc[lot.fund].cost += Number(lot.cost || 0);
+      return acc;
+    }, {});
+  }, [importedLotsDetailed]);
+
+  const importedSummaryList = useMemo(() => {
+    return Object.entries(importedSummary)
+      .map(([fund, stats]) => ({ fund, ...stats }))
+      .sort((a, b) => b.cost - a.cost);
+  }, [importedSummary]);
+
+  const reviewFunds = useMemo(() => Array.from(new Set(importedLotsDetailed.map((lot) => lot.fund))), [importedLotsDetailed]);
+  const reviewRows = reviewFilter === 'all' ? importedLotsDetailed : importedLotsDetailed.filter((lot) => lot.fund === reviewFilter);
+
   async function handleImportFile(event) {
     const file = event.target.files?.[0];
     if (!file) return;
@@ -89,8 +124,10 @@ export default function DeemedDisposalTab() {
       }
 
       const merged = mergeImportedLots(importedLots, result.lots, replaceOnImport);
+      const duplicateDelta = replaceOnImport ? 0 : Math.max(result.lots.length - (merged.length - importedLots.length), 0);
       setImportedLots(merged);
       saveImportedLots(merged);
+      setReviewFilter('all');
 
       setPrices((current) => {
         const next = { ...current };
@@ -104,7 +141,7 @@ export default function DeemedDisposalTab() {
         fileName: file.name,
         imported: result.lots.length,
         skipped: result.skipped,
-        duplicatesIgnored: replaceOnImport ? 0 : result.lots.length - (merged.length - importedLots.length),
+        duplicatesIgnored: duplicateDelta,
         mode: replaceOnImport ? 'replaced' : 'added',
         errors: result.errors,
         detectedFormat: result.detectedFormat,
@@ -122,6 +159,23 @@ export default function DeemedDisposalTab() {
     saveImportedLots([]);
     setImportSummary({ fileName: '', imported: 0, skipped: 0, duplicatesIgnored: 0, mode: 'cleared', errors: [] });
     setImportError('');
+    setReviewFilter('all');
+  }
+
+  function removeImportedLot(reviewKey) {
+    const next = importedLotsDetailed.filter((lot) => lot.reviewKey !== reviewKey).map(({ reviewKey: _reviewKey, deemedDate, days, ...rest }) => rest);
+    setImportedLots(next);
+    saveImportedLots(next);
+    setImportSummary({
+      fileName: 'Manual edit',
+      imported: 0,
+      skipped: 0,
+      duplicatesIgnored: 0,
+      mode: 'edited',
+      errors: [],
+      detectedFormat: 'Stored lots',
+      summaryByFund: importedSummaryList,
+    });
   }
 
   return (
@@ -151,7 +205,7 @@ export default function DeemedDisposalTab() {
           <div className="list-stack" style={{ gap: 10 }}>
             <p className="muted" style={{ margin: 0 }}>
               Upload a CSV with at least <span className="mono">Date</span>, <span className="mono">Fund</span>, and <span className="mono">Units</span> columns.
-              DeGiro transaction exports are now recognised automatically. Price and Cost are optional for generic CSVs.
+              DeGiro transaction exports are recognised automatically. Price and Cost are optional for generic CSVs.
             </p>
             <label className="checkbox-row">
               <input type="checkbox" checked={replaceOnImport} onChange={(e) => setReplaceOnImport(e.target.checked)} />
@@ -177,6 +231,8 @@ export default function DeemedDisposalTab() {
             <div className="notice success">
               {importSummary.mode === 'cleared' ? (
                 <span>Imported lots cleared.</span>
+              ) : importSummary.mode === 'edited' ? (
+                <span>Imported lots updated. The review table and calendar now reflect your manual changes.</span>
               ) : (
                 <>
                   <strong>{importSummary.fileName}</strong>: {importSummary.imported} lots {importSummary.mode}, {importSummary.skipped} rows skipped
@@ -191,6 +247,85 @@ export default function DeemedDisposalTab() {
           )}
         </div>
       </section>
+
+      <section className="card">
+        <div className="section-head compact">
+          <div>
+            <p className="eyebrow">Imported lots summary</p>
+            <h2>Sanity-check what came in</h2>
+          </div>
+          <span className="muted">{importedLotsDetailed.length ? `${importedSummaryList.length} funds · ${importedLotsDetailed.length} lots` : 'No imported lots yet'}</span>
+        </div>
+        {importedSummaryList.length ? (
+          <div className="summary-grid">
+            {importedSummaryList.map((item) => (
+              <div key={item.fund} className="mini-card summary-card">
+                <span className="muted small">{item.count} lots</span>
+                <strong>{item.fund}</strong>
+                <span className="muted">Units: {item.units.toFixed(4).replace(/\.0+$/, '')}</span>
+                <span className="muted">Cost basis: {formatEur(item.cost)}</span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="muted" style={{ margin: 0 }}>Upload a CSV and your imported lots summary will appear here.</p>
+        )}
+      </section>
+
+      {importedLotsDetailed.length > 0 && (
+        <section className="card">
+          <div className="section-head compact">
+            <div>
+              <p className="eyebrow">Review imported lots</p>
+              <h2>Delete anything that looks wrong</h2>
+            </div>
+            <div className="row wrap gap-sm mobile-stack">
+              <div className="row wrap gap-sm">
+                <span className="muted small">Filter:</span>
+                {['all', ...reviewFunds].map((fund) => (
+                  <button key={fund} className={`chip ${reviewFilter === fund ? 'active' : ''}`} onClick={() => setReviewFilter(fund)}>{fund === 'all' ? 'All imported' : fund}</button>
+                ))}
+              </div>
+            </div>
+          </div>
+          <div className="table-wrap">
+            <table className="table review-table">
+              <thead>
+                <tr>
+                  <th>Fund</th>
+                  <th>Buy date</th>
+                  <th>Units</th>
+                  <th>Cost</th>
+                  <th>Trigger date</th>
+                  <th>Source</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {reviewRows.map((lot) => (
+                  <tr key={lot.reviewKey}>
+                    <td>
+                      <strong>{lot.fund}</strong>
+                      {lot.isin ? <div className="muted small mono">{lot.isin}</div> : null}
+                    </td>
+                    <td>{lot.date}</td>
+                    <td>{lot.units}</td>
+                    <td>{formatEur(lot.cost)}</td>
+                    <td className={urgency(lot.days)}>
+                      <div>{formatLongDate(lot.deemedDate)}</div>
+                      <div className="muted small">{lot.days} days</div>
+                    </td>
+                    <td><span className="pill">{lot.importSource === 'degiro' ? 'DeGiro' : 'CSV'}</span></td>
+                    <td className="actions-cell">
+                      <button className="button danger small-button" type="button" onClick={() => removeImportedLot(lot.reviewKey)}>Delete</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <section className="card">
         <p className="eyebrow">Calendar view</p>
@@ -239,29 +374,29 @@ export default function DeemedDisposalTab() {
                 <th>Trigger date</th>
                 <th>Cost</th>
                 <th>Value</th>
-                <th>Tax 41%</th>
-                <th>Source</th>
-                <th>Urgency</th>
+                <th>Gain</th>
+                <th>Tax est.</th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((lot) => (
                 <tr key={lot.id}>
-                  <td><span className="pill" style={{ borderColor: FUND_COLORS[lot.fund] || 'rgba(255,255,255,0.2)' }}>{lot.fund}</span></td>
-                  <td className="mono small">{lot.date}</td>
-                  <td className="mono">{lot.units}</td>
-                  <td className="mono small">{formatLongDate(lot.deemedDate)}</td>
-                  <td className="mono">{formatEur(lot.cost)}</td>
-                  <td className="mono">{formatEur(lot.currentValue)}</td>
-                  <td className="mono">{formatEur(lot.taxLiability)}</td>
-                  <td className="small">{lot.source === 'imported' ? 'Imported' : 'Seeded'}</td>
-                  <td className={urgency(lot.days)}>{(lot.days / 365).toFixed(1)}y</td>
+                  <td>{lot.fund}</td>
+                  <td>{lot.date}</td>
+                  <td>{lot.units}</td>
+                  <td className={urgency(lot.days)}>
+                    {formatLongDate(lot.deemedDate)}
+                    <div className="muted small">{lot.days} days</div>
+                  </td>
+                  <td>{formatEur(lot.cost)}</td>
+                  <td>{formatEur(lot.currentValue)}</td>
+                  <td className={lot.gain >= 0 ? 'text-green' : 'text-red'}>{formatEur(lot.gain)}</td>
+                  <td>{formatEur(lot.taxLiability)}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
-        <p className="muted" style={{ marginTop: 12 }}>This is a planning tool, not a tax filing engine. It estimates gains from your current price assumptions and highlights likely deemed disposal trigger years.</p>
       </section>
     </div>
   );

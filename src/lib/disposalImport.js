@@ -1,19 +1,30 @@
-import { saveJson, loadJson } from './storage';
+const IMPORT_STORAGE_KEY = 'finance-dashboard.importedLots.v1';
 
-export const IMPORT_STORAGE_KEY = 'fd-disposal-imports';
+function loadJson(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw ? JSON.parse(raw) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function saveJson(key, value) {
+  localStorage.setItem(key, JSON.stringify(value));
+}
 
 const HEADER_ALIASES = {
-  date: ['date', 'trade date', 'purchase date', 'transaction date', 'datum'],
-  fund: ['fund', 'product', 'name', 'description', 'ticker', 'symbol', 'instrument'],
-  units: ['units', 'quantity', 'shares', 'units/shares', 'pieces'],
-  price: ['price', 'unit price', 'price per unit', 'trade price'],
-  cost: ['cost', 'total', 'gross amount', 'amount', 'consideration', 'value'],
-  type: ['type', 'action', 'transaction type', 'side'],
+  date: ['date', 'trade date', 'purchase date'],
+  fund: ['fund', 'product', 'name', 'security'],
   isin: ['isin'],
-  fees: ['fees', 'transaction and/or third party fees eur', 'transaction fees', 'fee'],
+  units: ['units', 'quantity', 'shares'],
+  price: ['price', 'price eur'],
+  cost: ['cost', 'total', 'total eur', 'gross amount'],
   totalEur: ['total eur'],
+  fees: ['transaction and/or third party fees eur', 'fees', 'fee'],
   valueEur: ['value eur'],
-  orderId: ['order id'],
+  orderId: ['order id', 'orderid'],
+  type: ['type', 'transaction type', 'side'],
 };
 
 const DEGiro_PRODUCT_MAP = {
@@ -117,7 +128,7 @@ function findHeaderIndex(headers, key) {
   return headers.findIndex((header) => aliases.includes(normalizeHeader(header)));
 }
 
-function makeLotKey(lot) {
+export function makeLotKey(lot) {
   return [lot.date, lot.isin || '', lot.fund, lot.units, lot.price, lot.cost, lot.orderId || ''].join('|');
 }
 
@@ -154,6 +165,18 @@ function detectDeGiro(headers) {
   return normalized.includes('product') && normalized.includes('isin') && normalized.includes('total eur') && normalized.includes('quantity');
 }
 
+function summarizeLots(lots) {
+  return Object.entries(
+    lots.reduce((acc, lot) => {
+      if (!acc[lot.fund]) acc[lot.fund] = { count: 0, units: 0, cost: 0 };
+      acc[lot.fund].count += 1;
+      acc[lot.fund].units += Number(lot.units || 0);
+      acc[lot.fund].cost += Number(lot.cost || 0);
+      return acc;
+    }, {})
+  ).map(([fund, stats]) => ({ fund, ...stats })).sort((a, b) => b.cost - a.cost);
+}
+
 function parseDeGiroCsv(rows, delimiter, headers) {
   const indexes = {
     date: findHeaderIndex(headers, 'date'),
@@ -172,7 +195,7 @@ function parseDeGiroCsv(rows, delimiter, headers) {
   let skipped = 0;
   const errors = [];
 
-  rows.slice(1).forEach((row, rowIndex) => {
+  rows.slice(1).forEach((row) => {
     const cells = splitCsvLine(row, delimiter);
     if (looksLikeNoiseRow(cells)) {
       skipped += 1;
@@ -228,18 +251,6 @@ function parseDeGiroCsv(rows, delimiter, headers) {
     detectedFormat: 'DeGiro',
     summaryByFund: summarizeLots(lots),
   };
-}
-
-function summarizeLots(lots) {
-  return Object.entries(
-    lots.reduce((acc, lot) => {
-      if (!acc[lot.fund]) acc[lot.fund] = { count: 0, units: 0, cost: 0 };
-      acc[lot.fund].count += 1;
-      acc[lot.fund].units += Number(lot.units || 0);
-      acc[lot.fund].cost += Number(lot.cost || 0);
-      return acc;
-    }, {})
-  ).map(([fund, stats]) => ({ fund, ...stats }));
 }
 
 function parseGenericCsv(rows, delimiter, headers) {
