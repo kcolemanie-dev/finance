@@ -197,3 +197,40 @@ pre { white-space: pre-wrap; margin: 0; font-family: inherit; }
   .span-2 { grid-column: auto; }
   .mobile-stack { flex-direction: column; }
 }
+
+.import-box {
+  display: grid;
+  gap: 14px;
+}
+
+.upload-dropzone {
+  display: grid;
+  gap: 6px;
+  padding: 18px;
+  border: 1px dashed rgba(96, 165, 250, 0.45);
+  border-radius: 18px;
+  background: rgba(59, 130, 246, 0.05);
+  cursor: pointer;
+}
+
+.checkbox-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.notice {
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+}
+
+.notice.success {
+  background: rgba(16, 185, 129, 0.08);
+  border-color: rgba(16, 185, 129, 0.3);
+}
+
+.notice.error {
+  background: rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.28);
+}
